@@ -1,0 +1,1443 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Madurai Safety &amp; Crime Heatmap Navigator</title>
+<meta name="description" content="Live safety zones, decaying crime heat and safer routing for Madurai city and its outer belts." />
+
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+<!-- Leaflet core + heat plugin -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+
+<!-- Supabase JS v2 (UMD build → window.supabase) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+
+<!-- Tailwind + Lucide -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lucide/0.454.0/umd/lucide.min.js"></script>
+<script>
+  window.tailwind && (tailwind.config = {
+    theme:{ extend:{
+      colors:{ ink:{900:'#0A0F14',800:'#0E151C',700:'#141D26',600:'#1B2733'},
+               safe:'#10B981', warn:'#F59E0B', risk:'#EF4444', brand:'#22D3EE' },
+      fontFamily:{ display:['"Bricolage Grotesque"','system-ui','sans-serif'], sans:['Inter','system-ui','sans-serif'] }
+    }}
+  });
+</script>
+
+<style>
+  :root{
+    --safe:#10B981; --warn:#F59E0B; --risk:#EF4444; --brand:#22D3EE;
+    --glass:rgba(20,29,38,.72); --hair:rgba(148,183,209,.16);
+  }
+  html,body{height:100%}
+  body{margin:0;background:#0A0F14;color:#E6EDF3;font-family:Inter,system-ui,sans-serif;overflow:hidden;-webkit-font-smoothing:antialiased}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:radial-gradient(60rem 30rem at 12% -10%,rgba(34,211,238,.10),transparent 60%),
+               radial-gradient(50rem 28rem at 100% 110%,rgba(239,68,68,.08),transparent 60%);}
+  .glass{background:var(--glass);backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);border:1px solid var(--hair)}
+  .hair{border-color:var(--hair)}
+
+  #map{position:absolute;inset:0;background:#0A0F14;z-index:0}
+  .leaflet-container{background:#0A0F14;font-family:Inter,system-ui,sans-serif}
+  .leaflet-tile-pane{filter:invert(1) hue-rotate(185deg) brightness(.82) contrast(1.05) saturate(.55)}
+  .leaflet-control-zoom a{background:var(--glass)!important;color:#E6EDF3!important;border-color:var(--hair)!important;backdrop-filter:blur(12px)}
+  .leaflet-control-zoom a:hover{background:#1B2733!important}
+  .leaflet-control-attribution{background:rgba(10,15,20,.75)!important;color:#7b8a99!important;font-size:10px}
+  .leaflet-control-attribution a{color:#9fb3c4!important}
+  .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:#141D26;color:#E6EDF3;border:1px solid var(--hair);box-shadow:0 18px 40px rgba(0,0,0,.55)}
+  .leaflet-popup-content{margin:.7rem .85rem;font-size:13px}
+  .leaflet-popup-close-button{color:#8ba0b3!important}
+
+  .zone-chip{display:inline-flex;align-items:center;gap:.3rem;white-space:nowrap;font-size:10.5px;font-weight:600;
+    padding:2px 7px;border-radius:999px;transform:translate(-50%,-50%);background:rgba(10,15,20,.78);
+    border:1px solid var(--hair);color:#D7E3ED;box-shadow:0 4px 14px rgba(0,0,0,.45)}
+  .zone-chip i.sw{width:6px;height:6px;border-radius:99px;display:block}
+  .zone-chip .badge{display:inline-grid;place-items:center;width:13px;height:13px;border-radius:99px;
+    background:var(--warn);color:#1a1200;font-size:9px;font-weight:700;margin-left:2px}
+
+  .pin{transform:translate(-50%,-100%);display:grid;place-items:center}
+  .pin span{width:26px;height:26px;border-radius:999px;display:grid;place-items:center;background:#141D26;
+    border:1.5px solid var(--warn);color:var(--warn);box-shadow:0 6px 18px rgba(0,0,0,.5)}
+  .pin.drop{animation:drop .55s cubic-bezier(.22,1.2,.36,1)}
+  @keyframes drop{0%{transform:translate(-50%,-260%) scale(.6);opacity:0}60%{opacity:1}100%{transform:translate(-50%,-100%) scale(1)}}
+  .pulse{animation:pulse 1.9s ease-out infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,.45)}70%{box-shadow:0 0 0 12px rgba(239,68,68,0)}100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}
+
+  .scroll::-webkit-scrollbar{width:8px;height:8px}
+  .scroll::-webkit-scrollbar-thumb{background:#243444;border-radius:99px}
+  .scroll::-webkit-scrollbar-track{background:transparent}
+
+  .field{width:100%;background:rgba(10,15,20,.6);border:1px solid var(--hair);border-radius:.6rem;
+    padding:.55rem .7rem;font-size:13px;color:#E6EDF3;outline:none}
+  .field:focus-visible{border-color:var(--brand);box-shadow:0 0 0 3px rgba(34,211,238,.18)}
+  select.field{appearance:none}
+  select.field option{background:#0E151C}
+  :focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+
+  .seg{display:flex;padding:3px;gap:3px;background:rgba(10,15,20,.6);border:1px solid var(--hair);border-radius:.7rem}
+  .seg button{flex:1;padding:.45rem .5rem;border-radius:.5rem;font-size:12.5px;font-weight:600;color:#8FA3B5;transition:.18s}
+  .seg button[aria-pressed="true"]{background:#1F2D3B;color:#E6EDF3;box-shadow:inset 0 0 0 1px var(--hair)}
+
+  .chip{display:flex;align-items:center;gap:.5rem;width:100%;text-align:left;padding:.5rem .6rem;border-radius:.6rem;
+    border:1px solid var(--hair);background:rgba(10,15,20,.45);font-size:12.5px;color:#93A6B8;transition:.18s}
+  .chip[aria-pressed="true"]{color:#E6EDF3;background:rgba(34,211,238,.09);border-color:rgba(34,211,238,.38)}
+  .chip .dot{width:7px;height:7px;border-radius:99px;background:#33465a;flex:none}
+  .chip[aria-pressed="true"] .dot{background:var(--brand);box-shadow:0 0 0 3px rgba(34,211,238,.18)}
+
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:.45rem;border-radius:.6rem;font-weight:600;font-size:13px;padding:.6rem .85rem;transition:.18s}
+  .btn-primary{background:var(--brand);color:#04141a}
+  .btn-primary:hover{filter:brightness(1.08)}
+  .btn-ghost{border:1px solid var(--hair);color:#C4D3E0;background:rgba(10,15,20,.4)}
+  .btn-ghost:hover{background:#1B2733}
+
+  /* Live-sync indicator */
+  .sync{display:flex;align-items:center;gap:.45rem;font-size:11.5px;padding:.35rem .6rem;border-radius:.55rem;
+    border:1px solid var(--hair);background:rgba(10,15,20,.45);color:#9FB3C4}
+  .sync .led{width:7px;height:7px;border-radius:99px;background:#64748B;flex:none}
+  .sync[data-s="live"] .led{background:var(--safe);animation:breathe 2.2s ease-in-out infinite}
+  .sync[data-s="connecting"] .led{background:var(--warn);animation:breathe 1s ease-in-out infinite}
+  .sync[data-s="local"] .led{background:var(--brand)}
+  .sync[data-s="error"] .led{background:var(--risk)}
+  @keyframes breathe{0%,100%{opacity:1;box-shadow:0 0 0 0 currentColor}50%{opacity:.45;box-shadow:0 0 0 4px rgba(16,185,129,.12)}}
+
+  .panel{transition:transform .28s cubic-bezier(.4,0,.2,1)}
+  @media (max-width:1023px){
+    #sidebar{position:absolute;z-index:40;top:0;bottom:0;left:0;width:min(88vw,22rem);transform:translateX(-102%)}
+    #sidebar.open{transform:translateX(0)}
+    #drawer{position:absolute;z-index:40;top:0;bottom:0;right:0;width:min(92vw,23rem);transform:translateX(102%)}
+    #drawer.open{transform:translateX(0)}
+  }
+  @media (min-width:1024px){ #drawer{width:23rem;transform:translateX(0);display:none} #drawer.open{display:flex} }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body class="font-sans">
+
+<div class="relative h-screen w-screen flex flex-col">
+
+  <!-- ══ HEADER ══ -->
+  <header class="relative z-30 glass flex items-center gap-3 px-3 sm:px-4 py-2.5 border-b" style="border-bottom-color:var(--hair)">
+    <button id="btnSidebar" class="lg:hidden btn btn-ghost !p-2" aria-label="Open controls">
+      <i data-lucide="panel-left" class="w-4 h-4"></i>
+    </button>
+
+    <div class="flex items-center gap-2.5 min-w-0">
+      <div class="w-9 h-9 rounded-xl grid place-items-center flex-none"
+           style="background:linear-gradient(145deg,rgba(34,211,238,.22),rgba(16,185,129,.16));border:1px solid var(--hair)">
+        <i data-lucide="shield-check" class="w-[18px] h-[18px]" style="color:var(--brand)"></i>
+      </div>
+      <div class="min-w-0">
+        <h1 class="font-display font-bold text-[15px] sm:text-[17px] leading-tight truncate">Madurai Safety Navigator</h1>
+        <p class="text-[11px] text-slate-400 leading-tight truncate hidden sm:block">Live zone ratings, decaying incident heat and safer routes</p>
+      </div>
+    </div>
+
+    <div class="ml-auto flex items-center gap-2">
+      <div id="syncBadge" class="sync" data-s="connecting" title="Database connection status">
+        <span class="led"></span><span id="syncText">Connecting…</span>
+      </div>
+      <div class="hidden lg:flex items-center gap-2 text-[11.5px] text-slate-400 px-2.5 py-1.5 rounded-lg hair border" style="background:rgba(10,15,20,.4)">
+        <span id="clock">—</span><span class="opacity-40">|</span><span id="modeLabel">Day map</span>
+      </div>
+      <button id="btnReport" class="btn btn-primary">
+        <i data-lucide="siren" class="w-4 h-4"></i><span class="hidden sm:inline">Report an issue</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="relative flex-1 flex overflow-hidden">
+
+    <!-- ══ SIDEBAR ══ -->
+    <aside id="sidebar" class="panel glass w-[21rem] flex-none flex flex-col border-r" style="border-right-color:var(--hair)">
+      <div class="flex items-center justify-between px-4 py-3 border-b" style="border-bottom-color:var(--hair)">
+        <h2 class="font-display font-bold text-[13.5px]">Map controls</h2>
+        <button id="closeSidebar" class="lg:hidden text-slate-400 hover:text-white" aria-label="Close controls">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="scroll flex-1 overflow-y-auto px-4 py-4 space-y-6">
+
+        <section>
+          <h3 class="font-display font-bold text-[13px] mb-2 flex items-center gap-2">
+            <i data-lucide="sun-moon" class="w-4 h-4" style="color:var(--brand)"></i>When are you travelling?
+          </h3>
+          <div class="seg" id="timeSeg" role="group" aria-label="Time of day">
+            <button data-time="day" aria-pressed="true">Daytime</button>
+            <button data-time="night" aria-pressed="false">After dark</button>
+            <button data-time="auto" aria-pressed="true">Auto</button>
+          </div>
+          <p id="timeNote" class="text-[11.5px] text-slate-400 mt-2 leading-relaxed"></p>
+        </section>
+
+        <section>
+          <h3 class="font-display font-bold text-[13px] mb-2 flex items-center gap-2">
+            <i data-lucide="route" class="w-4 h-4" style="color:var(--safe)"></i>Safe route finder
+          </h3>
+          <div class="space-y-2">
+            <label class="block"><span class="text-[11px] text-slate-400">Starting from</span>
+              <select id="fromSel" class="field mt-1"></select></label>
+            <label class="block"><span class="text-[11px] text-slate-400">Going to</span>
+              <select id="toSel" class="field mt-1"></select></label>
+            <div class="flex gap-2">
+              <button id="btnRoute" class="btn btn-primary flex-1"><i data-lucide="navigation" class="w-4 h-4"></i>Compare routes</button>
+              <button id="btnClearRoute" class="btn btn-ghost !px-3" aria-label="Clear routes"><i data-lucide="eraser" class="w-4 h-4"></i></button>
+            </div>
+          </div>
+          <div id="routeResult" class="mt-3"></div>
+        </section>
+
+        <section>
+          <h3 class="font-display font-bold text-[13px] mb-2 flex items-center gap-2">
+            <i data-lucide="radio" class="w-4 h-4" style="color:var(--warn)"></i>Live area alerts
+          </h3>
+          <div id="alertFeed" class="space-y-1.5"></div>
+        </section>
+
+        <section>
+          <h3 class="font-display font-bold text-[13px] mb-2 flex items-center gap-2">
+            <i data-lucide="layers" class="w-4 h-4" style="color:var(--warn)"></i>What to show on the map
+          </h3>
+          <div class="grid gap-1.5">
+            <button class="chip" data-layer="heat" aria-pressed="true"><span class="dot"></span>Crime heat overlay</button>
+            <button class="chip" data-layer="zones" aria-pressed="true"><span class="dot"></span>Locality safety zones</button>
+            <button class="chip" data-layer="labels" aria-pressed="true"><span class="dot"></span>Area name labels</button>
+            <button class="chip" data-layer="havens" aria-pressed="false"><span class="dot"></span>Police, hospitals &amp; safe havens</button>
+            <button class="chip" data-layer="reports" aria-pressed="true"><span class="dot"></span>Community reports</button>
+          </div>
+        </section>
+
+        <section>
+          <h3 class="font-display font-bold text-[13px] mb-2 flex items-center gap-2">
+            <i data-lucide="filter" class="w-4 h-4" style="color:var(--risk)"></i>Risk types in the heat map
+          </h3>
+          <div class="grid gap-1.5">
+            <button class="chip" data-cat="theft" aria-pressed="true"><span class="dot"></span>Pickpocketing &amp; petty theft</button>
+            <button class="chip" data-cat="isolation" aria-pressed="true"><span class="dot"></span>Isolated stretches after dark</button>
+            <button class="chip" data-cat="women" aria-pressed="true"><span class="dot"></span>Women's safety concerns</button>
+            <button class="chip" data-cat="traffic" aria-pressed="true"><span class="dot"></span>Accident-prone junctions</button>
+          </div>
+        </section>
+
+        <section>
+          <h3 class="font-display font-bold text-[13px] mb-2 flex items-center gap-2">
+            <i data-lucide="list-tree" class="w-4 h-4" style="color:var(--brand)"></i>Localities, safest first
+          </h3>
+          <div id="zoneList" class="space-y-1.5"></div>
+        </section>
+
+        <section>
+          <h3 class="font-display font-bold text-[13px] mb-2 flex items-center gap-2">
+            <i data-lucide="megaphone" class="w-4 h-4" style="color:var(--warn)"></i>Community reports
+            <span id="reportCount" class="ml-auto text-[11px] font-sans font-medium text-slate-400"></span>
+          </h3>
+          <div id="feed" class="space-y-1.5"></div>
+        </section>
+
+        <p class="text-[10.5px] text-slate-500 leading-relaxed pt-2 border-t" style="border-top-color:var(--hair)">
+          Baseline zone scores are illustrative sample data, adjusted live by community reports from the last 7 days.
+          In an emergency dial 100 (police), 108 (ambulance) or 1091 (women's helpline).
+        </p>
+      </div>
+    </aside>
+
+    <!-- ══ MAP ══ -->
+    <main class="relative flex-1">
+      <div id="map"></div>
+
+      <div class="absolute left-3 bottom-6 z-[500] glass rounded-xl px-3 py-2.5 hidden sm:block">
+        <p class="font-display font-bold text-[11.5px] mb-1.5">Safety tiers</p>
+        <div class="space-y-1 text-[11.5px] text-slate-300">
+          <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-sm" style="background:var(--safe)"></span>Safe and busy</div>
+          <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-sm" style="background:var(--warn)"></span>Stay aware</div>
+          <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-sm" style="background:var(--risk)"></span>Higher risk</div>
+        </div>
+      </div>
+
+      <div id="pickBanner" class="hidden absolute top-3 left-1/2 -translate-x-1/2 z-[600] glass rounded-full px-4 py-2 text-[12.5px] items-center gap-2">
+        <i data-lucide="crosshair" class="w-4 h-4" style="color:var(--brand)"></i>
+        Tap the spot on the map to place your report
+        <button id="pickCancel" class="ml-1 text-slate-400 hover:text-white"><i data-lucide="x" class="w-3.5 h-3.5"></i></button>
+      </div>
+
+      <div id="toast" class="hidden absolute bottom-6 left-1/2 -translate-x-1/2 z-[700] glass rounded-xl px-4 py-2.5 text-[13px] items-center gap-2"></div>
+    </main>
+
+    <aside id="drawer" class="panel glass flex-col border-l hidden" style="border-left-color:var(--hair)">
+      <div id="drawerBody" class="scroll flex-1 overflow-y-auto"></div>
+    </aside>
+
+    <div id="scrim" class="hidden lg:hidden absolute inset-0 z-[35] bg-black/50 backdrop-blur-[2px]"></div>
+  </div>
+</div>
+
+<!-- ══ REPORT MODAL ══ -->
+<div id="reportModal" class="hidden fixed inset-0 z-[900] items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+  <div class="glass rounded-2xl w-full max-w-md overflow-hidden" role="dialog" aria-modal="true" aria-labelledby="reportTitle">
+    <div class="flex items-center justify-between px-5 py-3.5 border-b" style="border-bottom-color:var(--hair)">
+      <h2 id="reportTitle" class="font-display font-bold text-[15px]">Report a safety issue</h2>
+      <button id="closeReport" class="text-slate-400 hover:text-white" aria-label="Close"><i data-lucide="x" class="w-4 h-4"></i></button>
+    </div>
+    <form id="reportForm" class="px-5 py-4 space-y-3.5">
+      <label class="block"><span class="text-[11.5px] text-slate-400">What did you notice?</span>
+        <select id="rType" class="field mt-1" required>
+          <option value="Poor street lighting">Poor street lighting</option>
+          <option value="Suspicious activity">Suspicious activity</option>
+          <option value="Traffic hazard">Traffic hazard or blocked road</option>
+          <option value="Harassment">Harassment or eve-teasing</option>
+          <option value="Theft / snatching">Theft or chain snatching</option>
+          <option value="Stray animal risk">Stray animal risk</option>
+        </select></label>
+
+      <div>
+        <span class="text-[11.5px] text-slate-400">How serious is it?</span>
+        <div class="seg mt-1" id="sevSeg" role="group" aria-label="Severity">
+          <button type="button" data-sev="1" aria-pressed="false">Minor</button>
+          <button type="button" data-sev="2" aria-pressed="true">Concerning</button>
+          <button type="button" data-sev="3" aria-pressed="false">Urgent</button>
+        </div>
+      </div>
+
+      <label class="block"><span class="text-[11.5px] text-slate-400">Nearest area</span>
+        <select id="rZone" class="field mt-1"></select></label>
+
+      <div>
+        <span class="text-[11.5px] text-slate-400">Exact spot</span>
+        <div class="flex gap-2 mt-1">
+          <input id="rLat" class="field" placeholder="Latitude" inputmode="decimal" required />
+          <input id="rLng" class="field" placeholder="Longitude" inputmode="decimal" required />
+        </div>
+        <button type="button" id="btnPick" class="btn btn-ghost w-full mt-2"><i data-lucide="map-pin" class="w-4 h-4"></i>Pick the spot on the map</button>
+      </div>
+
+      <label class="block"><span class="text-[11.5px] text-slate-400">Anything else worth knowing?</span>
+        <textarea id="rNote" rows="3" class="field mt-1" placeholder="e.g. Three street lights out near the subway entrance, dark after 8pm."></textarea></label>
+
+      <div class="flex items-center gap-2 pt-1">
+        <button type="submit" id="rSubmit" class="btn btn-primary flex-1"><i data-lucide="send" class="w-4 h-4"></i>Submit report</button>
+        <button type="button" id="cancelReport" class="btn btn-ghost">Cancel</button>
+      </div>
+      <p class="text-[10.5px] text-slate-500">Reports fade out of the heat map after 24 hours and stop affecting ratings after 7 days. In an emergency call 100 first.</p>
+    </form>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   MADURAI SAFETY NAVIGATOR — v2
+
+   ── QUICK SETUP ─────────────────────────────────────────────────────────────
+   The app runs out of the box with no backend (local mode: reports persist in
+   localStorage and sync live across open tabs via BroadcastChannel).
+   To go multi-user, create a Supabase project and paste the two values below.
+
+   1. Run this SQL in the Supabase SQL editor:
+
+        create table public.reports (
+          id          uuid primary key default gen_random_uuid(),
+          created_at  timestamptz      not null default now(),
+          locality    text             not null,   -- zone id, e.g. 'mattuthavani'
+          latitude    double precision not null,
+          longitude   double precision not null,
+          category    text             not null,   -- e.g. 'Poor street lighting'
+          description text,
+          severity    smallint         not null default 2   -- 1 minor, 2 concerning, 3 urgent
+        );
+
+        create index reports_created_at_idx on public.reports (created_at desc);
+
+        -- Anonymous community reporting: open read + insert, no updates/deletes.
+        alter table public.reports enable row level security;
+
+        create policy "public read"   on public.reports for select using (true);
+        create policy "public insert" on public.reports for insert with check (true);
+
+   2. Enable realtime on the table:
+        alter publication supabase_realtime add table public.reports;
+
+   3. Paste your project URL and anon key into SUPABASE_URL / SUPABASE_ANON_KEY.
+      The anon key is safe in client code as long as RLS is on, as above.
+
+   ── ARCHITECTURE NOTES ──────────────────────────────────────────────────────
+   • sync.*        one interface, two transports (Supabase | local BroadcastChannel)
+   • decay.*       TTL weighting: heat half-life 6h, hard cutoff 24h;
+                   score influence half-life 48h over a rolling 7-day window
+   • liveScore()   baseline score − community penalty, recomputed on every tick
+   • feeds.*       simulated RSS/traffic poller driving per-locality alert badges
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const SUPABASE_URL      = 'YOUR_SUPABASE_URL';        // e.g. https://abcdefgh.supabase.co
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';   // public anon key
+
+const CONFIG = {
+  heatHalfLifeHrs:   6,     // how fast a report's heat contribution halves
+  heatCutoffHrs:     24,    // dropped from the heat map entirely after this
+  scoreHalfLifeHrs:  48,    // slower decay for the rating penalty
+  scoreWindowDays:   7,     // rolling window for rating adjustment
+  maxPenalty:        1.7,   // most a locality's rating can fall from reports
+  feedPollMs:        45000, // simulated news/traffic poll interval
+  tickMs:            60000  // recompute decay + auto day/night every minute
+};
+
+/* ═══ 1. BASELINE DATA ═══════════════════════════════════════════════════ */
+const MADURAI = [9.9252, 78.1198];
+
+const ZONES = [
+  { id:'temple', name:'Meenakshi Amman Temple Zone', belt:'City core', c:[9.9195,78.1193], r:900,
+    day:4.7, night:4.0, risk:{theft:.72,isolation:.15,women:.28,traffic:.45},
+    blurb:'Dense pilgrim footfall from dawn aarti to late night. Very safe socially, but the busiest pickpocket belt in the city.',
+    havens:[['Police','Temple Police Outpost — 24/7'],['Hospital','Government Rajaji Hospital, 2.1 km'],['Hub','East Chithirai Street shops, open till 22:00']],
+    tips:['Wear your bag across the chest inside the four Chithirai streets.','Leave footwear at a receipted stand, not loose on the steps.','Agree on the auto fare before you sit; meters are rarely used here.'] },
+  { id:'townhall', name:'Town Hall Road', belt:'City core', c:[9.9216,78.1215], r:750,
+    day:4.3, night:3.4, risk:{theft:.68,isolation:.28,women:.35,traffic:.62},
+    blurb:'Retail spine linking the temple to the railway station. Crowded and well-lit till about 21:30, then shutters drop quickly.',
+    havens:[['Police','Madurai Town Police Station'],['Hospital','Apollo Speciality, 1.8 km'],['Hub','Madurai Junction concourse, 24/7']],
+    tips:['Crowd surges near the textile showrooms are prime pocket-picking moments.','Back lanes towards West Masi empty out fast after shops close.'] },
+  { id:'simmakkal', name:'Simmakkal', belt:'City core', c:[9.9243,78.1247], r:650,
+    day:4.1, night:3.5, risk:{theft:.6,isolation:.22,women:.38,traffic:.78},
+    blurb:'Food street energy late into the night, but the junction itself is chaotic and accident-prone.',
+    havens:[['Police','Tallakulam PS control point, 1.5 km'],['Hospital','Meenakshi Mission Hospital, 2.4 km'],['Hub','Konar mess belt, open past midnight']],
+    tips:['Cross at the signal — two-wheelers cut the corner at speed here.','Stick to the lit mess-hotel side of the road after 23:00.'] },
+  { id:'periyar', name:'Periyar Bus Stand', belt:'City core', c:[9.9185,78.1265], r:700,
+    day:3.6, night:2.8, risk:{theft:.85,isolation:.4,women:.55,traffic:.7},
+    blurb:'City bus hub with constant churn. Crowd cover makes bag-slashing and phone lifting common, especially at the platform edges.',
+    havens:[['Police','Bus stand police booth — 24/7'],['Hospital','Government Rajaji Hospital, 1.6 km'],['Hub','Stand canteen, open till 23:30']],
+    tips:['Keep phones out of rear pockets while boarding.','Use the pre-paid auto counter instead of the touts at the exit ramp.','Waiting alone past 23:00? Wait inside the lit ticket hall.'] },
+  { id:'goripalayam', name:'Goripalayam', belt:'City core', c:[9.9296,78.1266], r:800,
+    day:4.0, night:3.2, risk:{theft:.55,isolation:.35,women:.42,traffic:.82},
+    blurb:'Major junction feeding four arterial roads. Traffic conflict is the biggest daily risk; the flyover underpass is dim late.',
+    havens:[['Police','Goripalayam Police Station — 24/7'],['Hospital','Government Rajaji Hospital, 0.9 km'],['Hub','Dargah precinct, busy till late']],
+    tips:['Avoid the underpass on foot after 22:00; use the surface crossing.','Right turns onto the Alagarkoil road are a known collision point.'] },
+  { id:'kknagar', name:'K.K. Nagar', belt:'City core', c:[9.9127,78.1430], r:1100,
+    day:4.8, night:4.4, risk:{theft:.2,isolation:.16,women:.14,traffic:.4},
+    blurb:'Planned residential grid with wide, lit main roads and steady evening activity. One of the calmest belts to walk at night.',
+    havens:[['Police','K.K. Nagar Police Station — 24/7'],['Hospital','Meenakshi Mission Hospital, 1.2 km'],['Hub','80 Feet Road shops, open till 22:30']],
+    tips:['Main roads stay busy; the interior 4th–7th street loops go quiet by 22:00.','Good pick-up point if you need a safe late-night auto.'] },
+  { id:'annanagar', name:'Anna Nagar', belt:'City core', c:[9.9370,78.1420], r:1100,
+    day:4.7, night:4.3, risk:{theft:.24,isolation:.2,women:.16,traffic:.42},
+    blurb:'Well-maintained residential zone with good lighting, active resident associations and regular patrol presence.',
+    havens:[['Police','Anna Nagar Police Station — 24/7'],['Hospital','Velammal Medical College, 4.5 km'],['Hub','Anna Nagar main road eateries till 23:00']],
+    tips:['The park stretch is pleasant by day and empty after 21:30.','Reliable belt for solo women travellers staying overnight.'] },
+  { id:'tallakulam', name:'Tallakulam', belt:'City core', c:[9.9363,78.1348], r:900,
+    day:4.5, night:3.9, risk:{theft:.34,isolation:.26,women:.24,traffic:.55},
+    blurb:'Institutional area with courts, offices and hospitals. Busy on weekdays, noticeably quieter on Sunday evenings.',
+    havens:[['Police','Tallakulam Police Station — 24/7'],['Hospital','Meenakshi Mission Hospital, 1.0 km'],['Hub','Hospital reception areas, 24/7']],
+    tips:['Hospital frontage stays lit all night and is a safe place to wait.','Office lanes behind the collectorate empty out by 20:00.'] },
+  { id:'teppakulam', name:'Vandiyur Teppakulam', belt:'City core', c:[9.9260,78.1520], r:900,
+    day:4.2, night:3.0, risk:{theft:.4,isolation:.62,women:.45,traffic:.38},
+    blurb:'Scenic tank with a wide open perimeter. Lovely at sunset, but the far banks lose both lighting and people after dark.',
+    havens:[['Police','Vandiyur patrol point'],['Hospital','Meenakshi Mission Hospital, 2.8 km'],['Hub','Tank-side tea stalls till 21:00']],
+    tips:['Walk the road-facing bank, not the far corner, once it is dark.','Beautiful photo spot during Float Festival — expect heavy crowds then.'] },
+  { id:'arasaradi', name:'Arasaradi & Chintamani', belt:'City core', c:[9.9060,78.1250], r:850,
+    day:4.1, night:3.3, risk:{theft:.45,isolation:.4,women:.4,traffic:.6},
+    blurb:'Mixed commercial and residential corridor on the southern approach. Steady traffic, uneven footpaths and patchy lighting.',
+    havens:[['Police','Thideer Nagar patrol beat'],['Hospital','Apollo Speciality, 2.0 km'],['Hub','Arasaradi bus stop, active till 22:00']],
+    tips:['Lighting drops sharply on the link lanes off the main road.','Watch for parked lorries narrowing the carriageway at night.'] },
+  { id:'mattuthavani', name:'Mattuthavani (MIBT)', belt:'Outer city', c:[9.9470,78.1560], r:1200,
+    day:3.9, night:2.9, risk:{theft:.8,isolation:.55,women:.6,traffic:.72},
+    blurb:'The integrated bus terminus. Alive 24/7 with intercity arrivals, but the surrounding approach roads and parking lots are far quieter.',
+    havens:[['Police','MIBT Police Outpost — 24/7'],['Hospital','Velammal Medical College, 3.2 km'],['Hub','Terminus waiting hall, 24/7']],
+    tips:['Arriving at 03:00? Stay inside the lit terminus until first light or a booked cab arrives.','Do not follow touts to unofficial parking lots behind the market.','The adjacent vegetable market stretch is dark between 22:00 and 04:00.'] },
+  { id:'othakadai', name:'Othakadai', belt:'Outer city', c:[9.9550,78.1780], r:1300,
+    day:3.8, night:2.6, risk:{theft:.42,isolation:.82,women:.6,traffic:.65},
+    blurb:'Semi-urban edge on the Melur road. Development is patchy, so lit stretches alternate with long dark gaps.',
+    havens:[['Police','Othakadai Police Station'],['Hospital','Velammal Medical College, 2.5 km'],['Hub','Highway fuel station, 24/7']],
+    tips:['Prefer the main Melur road over shortcut village link roads at night.','Very few autos available after 22:00 — pre-book your return.'] },
+  { id:'thiruparankundram', name:'Thiruparankundram', belt:'Outer city', c:[9.8790,78.0720], r:1400,
+    day:4.4, night:3.1, risk:{theft:.5,isolation:.58,women:.4,traffic:.6},
+    blurb:'Temple town with heavy daytime pilgrim traffic. The hill base and approach steps become isolated soon after the evening pooja.',
+    havens:[['Police','Thiruparankundram Police Station — 24/7'],['Hospital','Government PHC, plus city hospitals 8 km'],['Hub','Temple front shops till 21:00']],
+    tips:['Climb the hill in daylight and come down before dusk.','The railway station approach lane is poorly lit at night.'] },
+  { id:'samayanallur', name:'Samayanallur', belt:'Outer city', c:[9.9650,78.0380], r:1500,
+    day:3.7, night:2.4, risk:{theft:.4,isolation:.85,women:.58,traffic:.85},
+    blurb:'Highway settlement on the Dindigul road. Fast-moving truck traffic and long unlit gaps between built-up clusters.',
+    havens:[['Police','Highway patrol beat, Samayanallur'],['Hospital','Government PHC; city hospitals 12 km'],['Hub','NH fuel plaza, 24/7']],
+    tips:['Crossing NH-44 on foot at night is the single biggest risk here.','Stick to the service road rather than the highway shoulder.'] },
+  { id:'vadipatti', name:'Vadipatti', belt:'Outer city', c:[10.0620,77.9600], r:1600,
+    day:3.9, night:2.5, risk:{theft:.3,isolation:.88,women:.5,traffic:.7},
+    blurb:'Town on the north-western edge, roughly 25 km out. Calm and community-policed by day; almost no lighting on the connecting roads.',
+    havens:[['Police','Vadipatti Police Station'],['Hospital','Government Hospital, Vadipatti'],['Hub','Bus stand tea shops till 21:00']],
+    tips:['Last dependable bus to the city is around 21:30.','Mobile coverage is thin on some link roads — download your map offline.'] },
+  { id:'villapuram', name:'Villapuram', belt:'Outer city', c:[9.9000,78.0940], r:1000,
+    day:4.0, night:3.0, risk:{theft:.48,isolation:.55,women:.45,traffic:.62},
+    blurb:'Residential and industrial mix on the south-west approach. Main road is fine; the interior lanes are dim and confusing at night.',
+    havens:[['Police','Villapuram Police Station'],['Hospital','Government Rajaji Hospital, 4.8 km'],['Hub','Main road bakeries till 22:00']],
+    tips:['Navigate by the main road even if the map offers a shorter lane.','Stray dog packs are common on the interior streets late.'] },
+  { id:'thirunagar', name:'Thirunagar', belt:'Outer city', c:[9.8830,78.0700], r:1200,
+    day:4.3, night:3.4, risk:{theft:.3,isolation:.45,women:.3,traffic:.5},
+    blurb:'Organised township with numbered sectors and a strong resident presence. Quieter but orderly after dark.',
+    havens:[['Police','Thirunagar Police Station'],['Hospital','Government Hospital, Thirunagar'],['Hub','Sector market, till 21:30']],
+    tips:['Sector boundaries are easy to mix up — confirm the sector number with your host.','Good, predictable belt for a night stay outside the city core.'] },
+  { id:'avaniyapuram', name:'Avaniyapuram', belt:'Outer city', c:[9.8890,78.1180], r:1200,
+    day:3.9, night:2.9, risk:{theft:.5,isolation:.6,women:.5,traffic:.68},
+    blurb:'Southern fringe known for the Jallikattu ground. Open land on both sides of the road means long low-activity stretches.',
+    havens:[['Police','Avaniyapuram Police Station'],['Hospital','Government Rajaji Hospital, 5.4 km'],['Hub','Main road fuel station, 24/7']],
+    tips:['During Pongal the area is packed — plan for gridlock, not for crime.','Otherwise, avoid the fields-side shoulder after dark.'] },
+  { id:'ringsouth', name:'Ring Road — Kappalur stretch', belt:'Ring road', c:[9.8620,78.0870], r:1600,
+    day:3.4, night:2.1, risk:{theft:.35,isolation:.92,women:.62,traffic:.95},
+    blurb:'High-speed bypass past the industrial estate. Minimal pedestrian infrastructure, long unlit runs and heavy night lorry traffic.',
+    havens:[['Police','Highway patrol, Kappalur'],['Hospital','Government Rajaji Hospital, 9 km'],['Hub','Truck dhaba cluster, 24/7']],
+    tips:['Never walk or park on the shoulder here at night.','If your vehicle breaks down, move to the dhaba cluster rather than waiting roadside.'] },
+  { id:'ringnorth', name:'Ring Road — northern bypass', belt:'Ring road', c:[9.9600,78.0800], r:1600,
+    day:3.5, night:2.2, risk:{theft:.32,isolation:.9,women:.6,traffic:.92},
+    blurb:'Fast link from the Dindigul road to the northern suburbs. Efficient by day, exposed and very dark once the sun goes down.',
+    havens:[['Police','Highway patrol beat'],['Hospital','Velammal Medical College, 7 km'],['Hub','Fuel plaza near the junction, 24/7']],
+    tips:['Two-wheelers should use the service lane, not the main carriageway.','Fog on winter mornings cuts visibility sharply near the junctions.'] },
+  { id:'junction', name:'Madurai Junction', belt:'City core', c:[9.9172,78.1216], r:700,
+    day:4.4, night:3.6, risk:{theft:.78,isolation:.2,women:.4,traffic:.55},
+    blurb:'Main railway station, staffed and lit around the clock. Safe to wait inside; the platform crowd is where phones disappear.',
+    havens:[['Police','Railway Police (GRP) — 24/7'],['Hospital','Government Rajaji Hospital, 1.9 km'],['Hub','Station waiting hall, 24/7']],
+    tips:['Use the retiring room or waiting hall for a long night layover.','Only take autos from the pre-paid counter on the west exit.'] }
+];
+
+const EDGES = [
+  ['temple','townhall'],['townhall','simmakkal'],['temple','junction'],['junction','periyar'],
+  ['townhall','periyar'],['simmakkal','goripalayam'],['goripalayam','tallakulam'],
+  ['tallakulam','annanagar'],['tallakulam','teppakulam'],['teppakulam','mattuthavani'],
+  ['annanagar','mattuthavani'],['mattuthavani','othakadai'],['goripalayam','annanagar'],
+  ['periyar','arasaradi'],['arasaradi','kknagar'],['kknagar','teppakulam'],['kknagar','tallakulam'],
+  ['arasaradi','avaniyapuram'],['avaniyapuram','thirunagar'],['thirunagar','ringsouth'],
+  ['ringsouth','thiruparankundram'],['thiruparankundram','villapuram'],['villapuram','arasaradi'],
+  ['villapuram','ringnorth'],['ringnorth','samayanallur'],['samayanallur','vadipatti'],
+  ['ringnorth','goripalayam'],['samayanallur','ringsouth'],['avaniyapuram','ringsouth'],
+  ['othakadai','annanagar'],['thiruparankundram','thirunagar'],['junction','arasaradi']
+];
+
+const HAVENS = [
+  ['Madurai Town Police Station','police',9.9225,78.1188],
+  ['Goripalayam Police Station','police',9.9299,78.1272],
+  ['K.K. Nagar Police Station','police',9.9131,78.1441],
+  ['Anna Nagar Police Station','police',9.9378,78.1409],
+  ['Tallakulam Police Station','police',9.9358,78.1341],
+  ['MIBT Police Outpost','police',9.9468,78.1552],
+  ['Government Rajaji Hospital','hospital',9.9281,78.1219],
+  ['Meenakshi Mission Hospital','hospital',9.9209,78.1478],
+  ['Apollo Speciality Hospital','hospital',9.9089,78.1362],
+  ['Velammal Medical College','hospital',9.9673,78.1652],
+  ['Madurai Junction — waiting hall','hub',9.9172,78.1216],
+  ['MIBT terminus hall','hub',9.9472,78.1566],
+  ['Periyar bus stand ticket hall','hub',9.9185,78.1265]
+];
+
+const byId = Object.fromEntries(ZONES.map(z=>[z.id,z]));
+
+/* Which report categories feed which risk dimension */
+const CAT_MAP = {
+  'Poor street lighting': 'isolation',
+  'Suspicious activity':  'women',
+  'Traffic hazard':       'traffic',
+  'Harassment':           'women',
+  'Theft / snatching':    'theft',
+  'Stray animal risk':    'isolation'
+};
+
+/* ═══ 2. STATE ═══════════════════════════════════════════════════════════ */
+const state = {
+  timePref:'auto',                 // 'auto' | 'day' | 'night'
+  time:'day',                      // resolved
+  layers:{ heat:true, zones:true, labels:true, havens:false, reports:true },
+  cats:{ theft:true, isolation:true, women:true, traffic:true },
+  active:null, picking:false, severity:2,
+  reports:[],                      // {id, created_at(ms), locality, latitude, longitude, category, description, severity}
+  alerts:[],                       // simulated live feed items
+  sync:'connecting'
+};
+
+/* ═══ 3. TIME, DECAY & LIVE SCORING ══════════════════════════════════════ */
+
+/* Madurai local time regardless of the viewer's own timezone */
+function istNow(){
+  const d = new Date();
+  return new Date(d.getTime() + (330 + d.getTimezoneOffset()) * 60000);
+}
+function autoMode(){ const h = istNow().getHours(); return (h >= 19 || h < 6) ? 'night' : 'day'; }
+
+const HRS = 3600000;
+const halfLife = (ageMs, hrs) => Math.pow(0.5, (ageMs/HRS)/hrs);
+
+const decay = {
+  heat(r){                                   // 0 → no contribution
+    const age = Date.now() - r.created_at;
+    if(age > CONFIG.heatCutoffHrs*HRS) return 0;
+    return halfLife(age, CONFIG.heatHalfLifeHrs);
+  },
+  score(r){
+    const age = Date.now() - r.created_at;
+    if(age > CONFIG.scoreWindowDays*24*HRS) return 0;
+    return halfLife(age, CONFIG.scoreHalfLifeHrs);
+  }
+};
+
+/* Rating penalty a locality has earned from recent community reports */
+function penaltyFor(zoneId){
+  let p = 0;
+  for(const r of state.reports){
+    if(r.locality !== zoneId) continue;
+    const w = decay.score(r);
+    if(!w) continue;
+    p += w * (r.severity || 2) * 0.16;
+  }
+  return Math.min(CONFIG.maxPenalty, p);
+}
+
+/* Extra heat a locality carries right now, 0–1 */
+function reportHeatFor(zoneId){
+  let h = 0;
+  for(const r of state.reports){
+    if(r.locality !== zoneId) continue;
+    const dim = CAT_MAP[r.category] || 'theft';
+    if(!state.cats[dim]) continue;
+    h += decay.heat(r) * (r.severity || 2) * 0.13;
+  }
+  return Math.min(1, h);
+}
+
+const baseScore = z => state.time==='day' ? z.day : z.night;
+function liveScore(z){
+  return Math.max(0.8, Math.min(5, baseScore(z) - penaltyFor(z.id)));
+}
+
+const tier  = s => s>=4.2 ? 'safe' : s>=3.2 ? 'warn' : 'risk';
+const COLOR = { safe:'#10B981', warn:'#F59E0B', risk:'#EF4444' };
+const tierWord = { safe:'Safe and busy', warn:'Stay aware', risk:'Higher risk' };
+
+function catRisk(z){
+  const on = Object.keys(state.cats).filter(k=>state.cats[k]);
+  let v = 0;
+  if(on.length){
+    v = on.reduce((s,k)=>s+z.risk[k],0)/on.length;
+    if(state.time==='night'){
+      v = Math.min(1, v*0.72 + (z.risk.isolation*0.55 + z.risk.women*0.35) * ((state.cats.isolation||state.cats.women)?0.75:0.2));
+    }
+  }
+  return Math.min(1, v + reportHeatFor(z.id)*0.55);
+}
+
+/* ═══ 4. SYNC LAYER — Supabase, or local fallback ════════════════════════ */
+const sync = (() => {
+  const CONFIGURED = !/^YOUR_/.test(SUPABASE_URL) && !/^YOUR_/.test(SUPABASE_ANON_KEY);
+  const LS_KEY = 'madurai.reports.v2';
+  let db = null, channel = null, bc = null, onInsert = ()=>{};
+
+  const normalise = row => ({
+    id: row.id,
+    created_at: typeof row.created_at === 'number' ? row.created_at : new Date(row.created_at).getTime(),
+    locality: row.locality,
+    latitude: Number(row.latitude),
+    longitude: Number(row.longitude),
+    category: row.category,
+    description: row.description || '',
+    severity: Number(row.severity) || 2
+  });
+
+  /* ---- local transport ------------------------------------------------ */
+  const local = {
+    read(){
+      try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]').map(normalise); }
+      catch { return []; }
+    },
+    write(rows){
+      try { localStorage.setItem(LS_KEY, JSON.stringify(rows)); } catch {}
+    }
+  };
+
+  function seedIfEmpty(){
+    if(local.read().length) return;
+    const now = Date.now();
+    local.write([
+      { id:'s1', created_at:now-1000*60*42,    locality:'othakadai',    latitude:9.9542, longitude:78.1761,
+        category:'Poor street lighting', severity:2, description:'Four lights out on the stretch before the bridge. Pitch dark by 19:30.' },
+      { id:'s2', created_at:now-1000*60*60*3,  locality:'goripalayam',  latitude:9.9301, longitude:78.1258,
+        category:'Traffic hazard', severity:3, description:'Sand spill near the flyover ramp, two-wheelers skidding.' },
+      { id:'s3', created_at:now-1000*60*60*9,  locality:'mattuthavani', latitude:9.9455, longitude:78.1583,
+        category:'Suspicious activity', severity:3, description:'Group loitering around the far parking lot, approaching solo passengers.' },
+      { id:'s4', created_at:now-1000*60*60*30, locality:'ringsouth',    latitude:9.8641, longitude:78.0902,
+        category:'Traffic hazard', severity:2, description:'Lorry broken down on the shoulder, no reflectors.' }
+    ]);
+  }
+
+  async function start(handler){
+    onInsert = handler;
+
+    if(!CONFIGURED){
+      seedIfEmpty();
+      // BroadcastChannel gives genuine live multi-client behaviour across tabs.
+      try {
+        bc = new BroadcastChannel('madurai-safety');
+        bc.onmessage = e => { if(e.data && e.data.type==='report') onInsert(normalise(e.data.row)); };
+      } catch {}
+      setSync('local', 'Local mode');
+      return local.read();
+    }
+
+    try {
+      setSync('connecting', 'Connecting…');
+      db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { realtime:{ params:{ eventsPerSecond:5 } } });
+
+      const since = new Date(Date.now() - CONFIG.scoreWindowDays*24*HRS).toISOString();
+      const { data, error } = await db.from('reports').select('*').gte('created_at', since).order('created_at',{ascending:false}).limit(500);
+      if(error) throw error;
+
+      channel = db.channel('reports-live')
+        .on('postgres_changes', { event:'INSERT', schema:'public', table:'reports' },
+            payload => onInsert(normalise(payload.new)))
+        .subscribe(status => {
+          if(status==='SUBSCRIBED')            setSync('live','Live syncing');
+          else if(status==='CHANNEL_ERROR' ||
+                  status==='TIMED_OUT')        setSync('error','Reconnecting…');
+          else if(status==='CLOSED')           setSync('error','Disconnected');
+          else                                 setSync('connecting','Connecting…');
+        });
+
+      return (data||[]).map(normalise);
+    } catch (err) {
+      console.warn('[sync] Supabase unavailable, falling back to local mode:', err && err.message);
+      seedIfEmpty();
+      setSync('error','Offline — local only');
+      return local.read();
+    }
+  }
+
+  async function insert(report){
+    if(!CONFIGURED || !db){
+      const rows = local.read(); rows.unshift(report); local.write(rows.slice(0,500));
+      try { bc && bc.postMessage({ type:'report', row:report }); } catch {}
+      return { ok:true, row:report, echo:true };   // echo: caller must add it locally
+    }
+    const { data, error } = await db.from('reports').insert({
+      locality:    report.locality,
+      latitude:    report.latitude,
+      longitude:   report.longitude,
+      category:    report.category,
+      description: report.description,
+      severity:    report.severity
+    }).select().single();
+
+    if(error) return { ok:false, error };
+    // Realtime will echo this INSERT back to us, so don't add it twice.
+    return { ok:true, row:normalise(data), echo:false };
+  }
+
+  return { start, insert, get configured(){ return CONFIGURED; } };
+})();
+
+function setSync(s, label){
+  state.sync = s;
+  const b = document.getElementById('syncBadge');
+  if(!b) return;
+  b.dataset.s = s;
+  document.getElementById('syncText').textContent = label;
+  b.title = s==='local'
+    ? 'No database configured — reports persist in this browser and sync across your open tabs'
+    : s==='live' ? 'Connected to Supabase realtime' : label;
+}
+
+/* ═══ 5. SIMULATED LIVE FEED (news / traffic RSS stand-in) ═══════════════ */
+const feeds = (() => {
+  const POOL = [
+    { zone:'goripalayam',  kind:'traffic', text:'Signal work at the flyover ramp — expect slow right turns' },
+    { zone:'goripalayam',  kind:'police',  text:'Extra traffic wardens posted at the junction this evening' },
+    { zone:'mattuthavani', kind:'traffic', text:'Night bus arrivals running 40 min late, crowd building at bay 6' },
+    { zone:'mattuthavani', kind:'police',  text:'Outpost patrol increased around the rear parking lots' },
+    { zone:'ringsouth',    kind:'traffic', text:'Lane closure past the industrial estate, single-file diversion' },
+    { zone:'ringnorth',    kind:'weather', text:'Low visibility reported near the bypass junction' },
+    { zone:'temple',       kind:'event',   text:'Evening procession expected — heavy footfall on Chithirai streets' },
+    { zone:'periyar',      kind:'police',  text:'Pickpocket advisory issued for platform 3 queues' },
+    { zone:'othakadai',    kind:'traffic', text:'Melur road resurfacing, loose gravel for 1.2 km' },
+    { zone:'simmakkal',    kind:'event',   text:'Food street crowd heavier than usual tonight' },
+    { zone:'samayanallur', kind:'traffic', text:'Heavy lorry movement on the NH service road' },
+    { zone:'junction',     kind:'event',   text:'Two express trains delayed, concourse crowding after 22:00' }
+  ];
+  const ICON = { traffic:'traffic-cone', police:'shield', weather:'cloud-fog', event:'users' };
+  const TTL = 1000*60*8;
+
+  function poll(){
+    const pick = POOL[Math.floor(Math.random()*POOL.length)];
+    if(!state.alerts.some(a => a.zone===pick.zone && a.text===pick.text)){
+      state.alerts.unshift({ ...pick, t:Date.now() });
+    }
+    prune();
+    renderAlerts(); drawZones(); renderZoneList();
+    if(state.active) openZone(state.active, true);
+  }
+  function prune(){
+    const cut = Date.now()-TTL;
+    state.alerts = state.alerts.filter(a => a.t > cut).slice(0,10);
+  }
+  function forZone(id){ return state.alerts.filter(a=>a.zone===id); }
+
+  function start(){
+    // Seed two so the panel is never empty on first paint.
+    state.alerts = [
+      { ...POOL[0], t:Date.now()-1000*60*4 },
+      { ...POOL[2], t:Date.now()-1000*60*2 }
+    ];
+    renderAlerts();
+    setInterval(poll, CONFIG.feedPollMs);
+  }
+  return { start, forZone, prune, ICON };
+})();
+
+/* ═══ 6. MAP ═════════════════════════════════════════════════════════════ */
+let map, zoneLayer, labelLayer, havenLayer, reportLayer, routeLayer, heatLayer=null;
+
+function initMap(){
+  map = L.map('map', { center:MADURAI, zoom:13, zoomControl:false });
+  L.control.zoom({ position:'bottomright' }).addTo(map);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom:19, attribution:'&copy; OpenStreetMap contributors · community safety data'
+  }).addTo(map);
+
+  zoneLayer   = L.layerGroup().addTo(map);
+  labelLayer  = L.layerGroup().addTo(map);
+  havenLayer  = L.layerGroup();
+  reportLayer = L.layerGroup().addTo(map);
+  routeLayer  = L.layerGroup().addTo(map);
+
+  map.on('click', e=>{
+    if(!state.picking) return;
+    $('rLat').value = e.latlng.lat.toFixed(5);
+    $('rLng').value = e.latlng.lng.toFixed(5);
+    let best=null, bd=Infinity;
+    ZONES.forEach(z=>{ const d=dist([e.latlng.lat,e.latlng.lng], z.c); if(d<bd){bd=d;best=z.id;} });
+    if(best) $('rZone').value = best;
+    cancelPick();
+    toast('Location added to your report');
+  });
+}
+
+function rnd(seed){ const x = Math.sin(seed*12.9898)*43758.5453; return x - Math.floor(x); }
+
+function blobFor(z,i){
+  const pts=[], n=11, latm=z.r/111320, lngm=z.r/(111320*Math.cos(z.c[0]*Math.PI/180));
+  for(let k=0;k<n;k++){
+    const a=(k/n)*Math.PI*2, wob=0.72+rnd(i*31+k*7)*0.5;
+    pts.push([ z.c[0]+Math.sin(a)*latm*wob, z.c[1]+Math.cos(a)*lngm*wob ]);
+  }
+  return pts;
+}
+
+function drawZones(){
+  if(!zoneLayer) return;
+  zoneLayer.clearLayers(); labelLayer.clearLayers();
+  ZONES.forEach((z,i)=>{
+    const s = liveScore(z), t = tier(s), col = COLOR[t];
+    const dropped = baseScore(z) - s;
+    const poly = L.polygon(blobFor(z,i+1), {
+      color:col, weight:1.6, opacity:.85, fillColor:col,
+      fillOpacity: state.active===z.id ? .34 : .15
+    });
+    poly.on('click', ()=>openZone(z.id));
+    poly.on('mouseover', ()=>poly.setStyle({fillOpacity:.3, weight:2.4}));
+    poly.on('mouseout',  ()=>poly.setStyle({fillOpacity: state.active===z.id?.34:.15, weight:1.6}));
+    poly.bindTooltip(`${z.name} · ${s.toFixed(1)}/5${dropped>0.05?` (↓${dropped.toFixed(1)} from live reports)`:''}`,
+                     { direction:'top', opacity:.95 });
+    zoneLayer.addLayer(poly);
+
+    const alerts = feeds.forZone(z.id).length;
+    const chip = L.marker(z.c, { icon: L.divIcon({ className:'', iconSize:[0,0], html:
+      `<div class="zone-chip"><i class="sw" style="background:${col}"></i>${escHtml(z.name)}${
+        alerts?`<span class="badge">${alerts}</span>`:''}</div>` }) });
+    chip.on('click', ()=>openZone(z.id));
+    labelLayer.addLayer(chip);
+  });
+}
+
+function drawHeat(){
+  if(heatLayer){ map.removeLayer(heatLayer); heatLayer=null; }
+  if(!state.layers.heat) return;
+  const pts=[];
+  ZONES.forEach((z,i)=>{
+    const v = catRisk(z);
+    if(v<0.05) return;
+    const latm=z.r/111320, lngm=z.r/(111320*Math.cos(z.c[0]*Math.PI/180));
+    const n = 22+Math.round(v*24);
+    for(let k=0;k<n;k++){
+      const a=rnd(i*97+k*3)*Math.PI*2, d=Math.sqrt(rnd(i*13+k*11))*0.95;
+      pts.push([ z.c[0]+Math.sin(a)*latm*d, z.c[1]+Math.cos(a)*lngm*d, Math.max(.12, v*(1-d*0.45)) ]);
+    }
+  });
+  // Live reports punch their own hot spots, weighted by TTL decay.
+  state.reports.forEach(r=>{
+    const w = decay.heat(r);
+    if(!w) return;
+    const dim = CAT_MAP[r.category] || 'theft';
+    if(!state.cats[dim]) return;
+    pts.push([ r.latitude, r.longitude, Math.min(1, w*(r.severity||2)*0.34) ]);
+  });
+
+  heatLayer = L.heatLayer(pts, {
+    radius:34, blur:26, maxZoom:16, minOpacity:.25,
+    gradient:{ 0.25:'#10B981', 0.5:'#F59E0B', 0.72:'#F97316', 1:'#EF4444' }
+  }).addTo(map);
+  if(heatLayer._canvas) heatLayer._canvas.style.mixBlendMode='screen';
+}
+
+const HAVEN_ICON = { police:'shield', hospital:'cross', hub:'lamp' };
+function drawHavens(){
+  havenLayer.clearLayers();
+  HAVENS.forEach(([name,kind,lat,lng])=>{
+    const col = kind==='police' ? '#22D3EE' : kind==='hospital' ? '#10B981' : '#F59E0B';
+    const m = L.marker([lat,lng], { icon:L.divIcon({ className:'', iconSize:[0,0], html:
+      `<div class="pin"><span style="border-color:${col};color:${col}">
+        <i data-lucide="${HAVEN_ICON[kind]}" style="width:13px;height:13px"></i></span></div>` }) });
+    m.bindPopup(`<strong>${escHtml(name)}</strong><br><span style="color:#8FA3B5">${
+      kind==='police'?'Police — open round the clock':kind==='hospital'?'Hospital with emergency care':'Public hub, staffed late'}</span>`);
+    havenLayer.addLayer(m);
+  });
+  icons();
+}
+
+function drawReports(){
+  reportLayer.clearLayers();
+  const live = state.reports.filter(r => decay.heat(r) > 0);
+  live.forEach(r=> reportLayer.addLayer(reportMarker(r, false)));
+  icons();
+}
+
+function reportMarker(r, animate){
+  const w = decay.heat(r);
+  const fresh = Date.now()-r.created_at < 1000*60*90;
+  const col = (r.severity||2) >= 3 ? '#EF4444' : (r.severity||2) === 2 ? '#F59E0B' : '#22D3EE';
+  const m = L.marker([r.latitude,r.longitude], { icon:L.divIcon({ className:'', iconSize:[0,0], html:
+    `<div class="pin ${animate?'drop':''}" style="opacity:${(0.45+w*0.55).toFixed(2)}">
+       <span class="${fresh?'pulse':''}" style="border-color:${col};color:${col}">
+         <i data-lucide="alert-triangle" style="width:13px;height:13px"></i></span></div>` }) });
+  m.bindPopup(
+    `<strong>${escHtml(r.category)}</strong><br>
+     <span style="color:#8FA3B5">${escHtml(byId[r.locality]?byId[r.locality].name:'Madurai')} · ${ago(r.created_at)} · ${
+       ['','minor','concerning','urgent'][r.severity||2]}</span>
+     ${r.description?`<br><br>${escHtml(r.description)}`:''}
+     <br><br><span style="color:#64748B;font-size:11px">Heat weight ${(w*100).toFixed(0)}% — fades out ${
+       relFuture(r.created_at + CONFIG.heatCutoffHrs*HRS)}</span>`);
+  return m;
+}
+
+/* ═══ 7. ROUTING ═════════════════════════════════════════════════════════ */
+const ADJ = {};
+ZONES.forEach(z=>ADJ[z.id]=[]);
+EDGES.forEach(([a,b])=>{
+  if(!byId[a]||!byId[b]) return;
+  const d = dist(byId[a].c, byId[b].c);
+  ADJ[a].push({to:b,d}); ADJ[b].push({to:a,d});
+});
+
+function dist(a,b){
+  const R=6371, dLat=(b[0]-a[0])*Math.PI/180, dLng=(b[1]-a[1])*Math.PI/180;
+  const h = Math.sin(dLat/2)**2 + Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+
+function dijkstra(from,to,weight){
+  const D={}, P={}, seen=new Set();
+  ZONES.forEach(z=>D[z.id]=Infinity); D[from]=0;
+  while(true){
+    let u=null,best=Infinity;
+    for(const id in D) if(!seen.has(id)&&D[id]<best){ best=D[id]; u=id; }
+    if(u===null||u===to) break;
+    seen.add(u);
+    ADJ[u].forEach(e=>{ const alt=D[u]+weight(u,e.to,e.d); if(alt<D[e.to]){ D[e.to]=alt; P[e.to]=u; } });
+  }
+  if(D[to]===Infinity) return null;
+  const path=[to]; while(path[0]!==from){ const p=P[path[0]]; if(!p) return null; path.unshift(p); }
+  return path;
+}
+
+const routeStats = path => ({
+  km: path.slice(1).reduce((s,id,i)=>s+dist(byId[path[i]].c, byId[id].c),0),
+  safety: path.reduce((s,id)=>s+liveScore(byId[id]),0)/path.length,
+  alerts: path.reduce((s,id)=>s+feeds.forZone(id).length,0)
+});
+
+function findRoutes(){
+  const from=fromSel.value, to=toSel.value;
+  routeLayer.clearLayers();
+  if(from===to){ routeResult.innerHTML = note('Pick two different places to compare a route.'); return; }
+
+  const fast = dijkstra(from,to,(a,b,d)=>d);
+  const safe = dijkstra(from,to,(a,b,d)=>{
+    const risk = (5 - (liveScore(byId[a])+liveScore(byId[b]))/2)/5;
+    const alertPenalty = (feeds.forZone(b).length)*0.12;
+    return d * (1 + risk*3.2 + alertPenalty);
+  });
+  if(!fast){ routeResult.innerHTML = note('No mapped road link between those two areas in this data set.'); return; }
+
+  const fs=routeStats(fast), ss=routeStats(safe), same = fast.join()===safe.join();
+  if(!same) drawRoute(fast,'#64748B','Fastest route',5,'8 8');
+  drawRoute(safe,'#10B981','Safest route',6,null);
+  map.fitBounds(L.latLngBounds([...fast,...safe].map(id=>byId[id].c)), { padding:[70,70], maxZoom:14 });
+
+  const detour = fs.km>0 ? Math.round(((ss.km-fs.km)/fs.km)*100) : 0;
+  routeResult.innerHTML = `
+    <div class="rounded-xl border hair overflow-hidden" style="background:rgba(10,15,20,.45)">
+      <div class="px-3 py-2.5 border-b" style="border-bottom-color:var(--hair)">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="w-2.5 h-2.5 rounded-sm" style="background:var(--safe)"></span>
+          <span class="font-display font-bold text-[12.5px]">Safest route</span>
+          <span class="ml-auto text-[11.5px] text-slate-400">${ss.km.toFixed(1)} km</span>
+        </div>
+        <p class="text-[11.5px] text-slate-400 leading-relaxed">${safe.map(id=>escHtml(byId[id].name)).join(' → ')}</p>
+        <p class="text-[11.5px] mt-1.5" style="color:var(--safe)">Live rating ${ss.safety.toFixed(1)}/5 ${
+          state.time==='night'?'after dark':'by day'}${ss.alerts?` · ${ss.alerts} active alert${ss.alerts>1?'s':''} en route`:''}</p>
+      </div>
+      ${ same ? `<div class="px-3 py-2.5 text-[11.5px] text-slate-400 leading-relaxed">
+          The quickest way is also the safest right now — no trade-off to make.</div>`
+      : `<div class="px-3 py-2.5">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="w-2.5 h-2.5 rounded-sm" style="background:#64748B"></span>
+            <span class="font-display font-bold text-[12.5px] text-slate-300">Fastest route</span>
+            <span class="ml-auto text-[11.5px] text-slate-400">${fs.km.toFixed(1)} km</span>
+          </div>
+          <p class="text-[11.5px] text-slate-400 leading-relaxed">${fast.map(id=>escHtml(byId[id].name)).join(' → ')}</p>
+          <p class="text-[11.5px] text-slate-400 mt-1.5">Live rating ${fs.safety.toFixed(1)}/5</p>
+        </div>
+        <div class="px-3 py-2.5 border-t text-[11.5px] leading-relaxed" style="border-top-color:var(--hair);background:rgba(245,158,11,.08);color:#FBBF24">
+          <strong class="font-semibold">The trade-off:</strong> the safer line adds about ${Math.max(detour,1)}% distance
+          and gains ${(ss.safety-fs.safety).toFixed(1)} rating points by staying on lit main belts.
+        </div>`}
+    </div>`;
+}
+
+function drawRoute(path,color,label,weight,dash){
+  const pts = path.map(id=>byId[id].c);
+  L.polyline(pts,{color,weight:weight+5,opacity:.14}).addTo(routeLayer);
+  L.polyline(pts,{color,weight,opacity:.95,dashArray:dash,lineCap:'round',lineJoin:'round'})
+   .addTo(routeLayer).bindTooltip(label,{sticky:true});
+  pts.forEach((p,i)=>{
+    const end = i===0||i===pts.length-1;
+    L.circleMarker(p,{radius:end?7:4.5,color,weight:2.5,fillColor:end?color:'#0A0F14',fillOpacity:1})
+     .addTo(routeLayer).bindTooltip(byId[path[i]].name,{direction:'top'});
+  });
+}
+
+const note = t => `<p class="text-[11.5px] text-slate-400 leading-relaxed px-1">${t}</p>`;
+
+/* ═══ 8. DRAWER ══════════════════════════════════════════════════════════ */
+function stars(v){
+  const full=Math.floor(v), half=v-full>=.5;
+  let h='';
+  for(let i=0;i<5;i++){
+    const on=i<full, hf=i===full&&half;
+    h += `<i data-lucide="${hf?'star-half':'star'}" class="w-3.5 h-3.5" style="${on||hf?'color:#FBBF24;fill:#FBBF24':'color:#33465a'}"></i>`;
+  }
+  return h;
+}
+
+function openZone(id, keepView){
+  const z = byId[id]; if(!z) return;
+  state.active = id;
+  const s = liveScore(z), t = tier(s), col = COLOR[t];
+  const drop = baseScore(z) - s;
+  const zoneReports = state.reports.filter(r=>r.locality===id && decay.score(r)>0)
+                                   .sort((a,b)=>b.created_at-a.created_at);
+  const alerts = feeds.forZone(id);
+
+  drawerBody.innerHTML = `
+    <div class="px-5 pt-4 pb-3 border-b sticky top-0 z-10" style="border-bottom-color:var(--hair);background:var(--glass);backdrop-filter:blur(16px)">
+      <div class="flex items-start gap-3">
+        <div class="min-w-0">
+          <p class="text-[11px] text-slate-400">${z.belt}</p>
+          <h2 class="font-display font-bold text-[17px] leading-snug">${escHtml(z.name)}</h2>
+        </div>
+        <button id="closeDrawer" class="ml-auto text-slate-400 hover:text-white flex-none mt-0.5" aria-label="Close panel">
+          <i data-lucide="x" class="w-4 h-4"></i></button>
+      </div>
+      <div class="flex items-center gap-2 mt-2.5 flex-wrap">
+        <span class="text-[11.5px] font-semibold px-2 py-0.5 rounded-md" style="color:${col};background:${col}1f;border:1px solid ${col}44">${tierWord[t]}</span>
+        <span class="text-[11.5px] text-slate-400">${state.time==='day'?'Daytime view':'After-dark view'}</span>
+        ${drop>0.05?`<span class="text-[11.5px]" style="color:var(--risk)">↓${drop.toFixed(1)} from recent reports</span>`:''}
+      </div>
+    </div>
+
+    <div class="px-5 py-4 space-y-5">
+      ${alerts.length?`
+      <div class="rounded-xl border p-3 space-y-2" style="border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.07)">
+        <p class="font-display font-bold text-[12.5px]" style="color:#FBBF24">Active right now</p>
+        ${alerts.map(a=>`<div class="flex gap-2 text-[12px] text-amber-100/90 leading-relaxed">
+          <i data-lucide="${feeds.ICON[a.kind]}" class="w-3.5 h-3.5 mt-0.5 flex-none"></i>
+          <span>${escHtml(a.text)} <span class="text-amber-200/50">· ${ago(a.t)}</span></span></div>`).join('')}
+      </div>`:''}
+
+      <div class="grid grid-cols-2 gap-2.5">
+        ${ratingCard('Daytime', Math.max(0.8, z.day-penaltyFor(z.id)), state.time==='day')}
+        ${ratingCard('After dark', Math.max(0.8, z.night-penaltyFor(z.id)), state.time==='night')}
+      </div>
+
+      <p class="text-[13px] text-slate-300 leading-relaxed">${escHtml(z.blurb)}</p>
+
+      <div>
+        <h3 class="font-display font-bold text-[12.5px] mb-2">Risk breakdown</h3>
+        <div class="space-y-2">
+          ${bar('Pickpocketing and theft', z.risk.theft)}
+          ${bar('Isolated after dark', z.risk.isolation)}
+          ${bar("Women's safety concerns", z.risk.women)}
+          ${bar('Accident-prone traffic', z.risk.traffic)}
+        </div>
+      </div>
+
+      <div>
+        <h3 class="font-display font-bold text-[12.5px] mb-2">Community reports, last 7 days
+          <span class="text-slate-500 font-sans font-medium">(${zoneReports.length})</span></h3>
+        ${ zoneReports.length ? `<div class="space-y-1.5">${zoneReports.slice(0,5).map(r=>`
+            <div class="px-3 py-2 rounded-lg border hair" style="background:rgba(10,15,20,.45)">
+              <div class="flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full flex-none" style="background:${(r.severity||2)>=3?'var(--risk)':(r.severity||2)===2?'var(--warn)':'var(--brand)'}"></span>
+                <span class="text-[12.5px] text-slate-200">${escHtml(r.category)}</span>
+                <span class="ml-auto text-[11px] text-slate-500">${ago(r.created_at)}</span>
+              </div>
+              ${r.description?`<p class="text-[11.5px] text-slate-400 mt-1 leading-relaxed">${escHtml(r.description)}</p>`:''}
+              <p class="text-[10.5px] text-slate-600 mt-1">Rating weight ${(decay.score(r)*100).toFixed(0)}%</p>
+            </div>`).join('')}</div>`
+          : note('Nothing reported here in the last week.') }
+      </div>
+
+      <div>
+        <h3 class="font-display font-bold text-[12.5px] mb-2">Nearest safe havens</h3>
+        <div class="space-y-1.5">
+          ${z.havens.map(([kind,label])=>`
+            <div class="flex items-start gap-2.5 px-3 py-2 rounded-lg border hair" style="background:rgba(10,15,20,.45)">
+              <i data-lucide="${kind==='Police'?'shield':kind==='Hospital'?'cross':'lamp'}" class="w-4 h-4 mt-0.5 flex-none"
+                 style="color:${kind==='Police'?'#22D3EE':kind==='Hospital'?'#10B981':'#F59E0B'}"></i>
+              <div><p class="text-[11px] text-slate-400 leading-tight">${kind}</p>
+                   <p class="text-[12.5px] leading-snug">${escHtml(label)}</p></div>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <div>
+        <h3 class="font-display font-bold text-[12.5px] mb-2">Local know-how</h3>
+        <ul class="space-y-2">
+          ${z.tips.map(tip=>`<li class="flex gap-2.5 text-[12.5px] text-slate-300 leading-relaxed">
+            <i data-lucide="corner-down-right" class="w-3.5 h-3.5 mt-1 flex-none" style="color:var(--brand)"></i>
+            <span>${escHtml(tip)}</span></li>`).join('')}
+        </ul>
+      </div>
+
+      <div class="flex gap-2">
+        <button class="btn btn-ghost flex-1" data-set="from"><i data-lucide="circle-dot" class="w-4 h-4"></i>Start here</button>
+        <button class="btn btn-ghost flex-1" data-set="to"><i data-lucide="flag" class="w-4 h-4"></i>End here</button>
+      </div>
+    </div>`;
+
+  drawer.classList.add('open','flex'); drawer.classList.remove('hidden');
+  if(window.innerWidth<1024) scrim.classList.remove('hidden');
+  drawerBody.querySelector('#closeDrawer').onclick = closeDrawer;
+  drawerBody.querySelectorAll('[data-set]').forEach(b=> b.onclick = ()=>{
+    (b.dataset.set==='from'?fromSel:toSel).value = z.id;
+    toast(b.dataset.set==='from'?'Set as your starting point':'Set as your destination');
+  });
+  if(!keepView) map.flyTo(z.c, Math.max(map.getZoom(),14), { duration:.7 });
+  drawZones(); renderZoneList(); icons();
+}
+
+function ratingCard(label,val,active){
+  const col = COLOR[tier(val)];
+  return `<div class="rounded-xl border p-3" style="background:rgba(10,15,20,.5);border-color:${active?col+'55':'var(--hair)'}">
+    <p class="text-[11px] text-slate-400">${label}</p>
+    <p class="font-display font-bold text-[20px] leading-tight" style="color:${col}">${val.toFixed(1)}<span class="text-[12px] text-slate-500 font-sans font-medium">/5</span></p>
+    <div class="flex gap-0.5 mt-1">${stars(val)}</div></div>`;
+}
+
+function bar(label,v){
+  const col = v>=.66?COLOR.risk:v>=.38?COLOR.warn:COLOR.safe;
+  return `<div>
+    <div class="flex items-center justify-between text-[11.5px] mb-1">
+      <span class="text-slate-300">${label}</span><span class="text-slate-400">${v>=.66?'High':v>=.38?'Moderate':'Low'}</span></div>
+    <div class="h-1.5 rounded-full overflow-hidden" style="background:#1B2733">
+      <div class="h-full rounded-full" style="width:${Math.round(v*100)}%;background:${col}"></div></div></div>`;
+}
+
+function closeDrawer(){
+  state.active=null;
+  drawer.classList.remove('open','flex'); drawer.classList.add('hidden');
+  scrim.classList.add('hidden');
+  drawZones(); renderZoneList();
+}
+
+/* ═══ 9. SIDEBAR RENDERERS ═══════════════════════════════════════════════ */
+function renderZoneList(){
+  const sorted=[...ZONES].sort((a,b)=>liveScore(b)-liveScore(a));
+  zoneList.innerHTML = sorted.map(z=>{
+    const s=liveScore(z), col=COLOR[tier(s)], drop=baseScore(z)-s, al=feeds.forZone(z.id).length;
+    return `<button class="chip" data-zone="${z.id}" aria-pressed="${state.active===z.id}">
+      <span class="dot" style="background:${col};box-shadow:0 0 0 3px ${col}22"></span>
+      <span class="flex-1 truncate text-slate-200">${escHtml(z.name)}</span>
+      ${al?`<span class="text-[10px] px-1.5 rounded-full" style="background:rgba(245,158,11,.18);color:#FBBF24">${al}</span>`:''}
+      ${drop>0.05?`<i data-lucide="trending-down" class="w-3 h-3" style="color:var(--risk)"></i>`:''}
+      <span class="text-[11.5px] font-semibold" style="color:${col}">${s.toFixed(1)}</span></button>`;
+  }).join('');
+  zoneList.querySelectorAll('[data-zone]').forEach(b=> b.onclick=()=>{
+    openZone(b.dataset.zone); if(window.innerWidth<1024) closeSidebarFn();
+  });
+  icons();
+}
+
+function renderFeed(){
+  const live = state.reports.filter(r=>decay.score(r)>0).sort((a,b)=>b.created_at-a.created_at);
+  $('reportCount').textContent = live.length ? `${live.length} in 7 days` : '';
+  if(!live.length){ feed.innerHTML = note('No reports yet. Use “Report an issue” to flag something you have seen.'); return; }
+  feed.innerHTML = live.slice(0,6).map(r=>{
+    const col = (r.severity||2)>=3?'var(--risk)':(r.severity||2)===2?'var(--warn)':'var(--brand)';
+    const faded = decay.heat(r)===0;
+    return `<button class="chip" data-rep="${r.id}" style="${faded?'opacity:.55':''}">
+      <span class="dot" style="background:${col};box-shadow:0 0 0 3px ${col}22"></span>
+      <span class="flex-1 min-w-0">
+        <span class="block truncate text-slate-200">${escHtml(r.category)}</span>
+        <span class="block truncate text-[11px] text-slate-500">${escHtml(byId[r.locality]?byId[r.locality].name:'Madurai')} · ${ago(r.created_at)}${faded?' · cooled off':''}</span>
+      </span></button>`;
+  }).join('');
+  feed.querySelectorAll('[data-rep]').forEach(b=> b.onclick=()=>{
+    const r = state.reports.find(x=>String(x.id)===b.dataset.rep);
+    if(!r) return;
+    map.flyTo([r.latitude,r.longitude],15,{duration:.7});
+    if(window.innerWidth<1024) closeSidebarFn();
+  });
+}
+
+function renderAlerts(){
+  feeds.prune();
+  if(!state.alerts.length){ alertFeed.innerHTML = note('Monitoring traffic and police feeds for the zones you have open.'); return; }
+  alertFeed.innerHTML = state.alerts.slice(0,5).map(a=>`
+    <button class="chip" data-alert="${a.zone}">
+      <i data-lucide="${feeds.ICON[a.kind]}" class="w-3.5 h-3.5 flex-none" style="color:var(--warn)"></i>
+      <span class="flex-1 min-w-0">
+        <span class="block truncate text-slate-200">${escHtml(a.text)}</span>
+        <span class="block truncate text-[11px] text-slate-500">${escHtml(byId[a.zone]?byId[a.zone].name:a.zone)} · ${ago(a.t)}</span>
+      </span></button>`).join('');
+  alertFeed.querySelectorAll('[data-alert]').forEach(b=> b.onclick=()=>{
+    openZone(b.dataset.alert); if(window.innerWidth<1024) closeSidebarFn();
+  });
+  icons();
+}
+
+function ago(t){
+  const m=Math.round((Date.now()-t)/60000);
+  if(m<1) return 'just now';
+  if(m<60) return `${m} min ago`;
+  const h=Math.round(m/60);
+  return h<24 ? `${h} hr ago` : `${Math.round(h/24)} d ago`;
+}
+function relFuture(t){
+  const m=Math.round((t-Date.now())/60000);
+  if(m<=0) return 'now';
+  if(m<60) return `in ${m} min`;
+  return `in ${Math.round(m/60)} hr`;
+}
+const escHtml = s => String(s).replace(/[<>&"]/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+
+/* Lucide is optional-safe: never throw if the CDN is blocked. */
+function icons(){ try { window.lucide && lucide.createIcons(); } catch(e){} }
+
+/* ═══ 10. CONTROLS ═══════════════════════════════════════════════════════ */
+const $ = id => document.getElementById(id);
+let sidebar, drawer, drawerBody, scrim, fromSel, toSel, routeResult, zoneList, feed, alertFeed,
+    reportModal, pickBanner, toastEl;
+
+function bindUI(){
+  sidebar=$('sidebar'); drawer=$('drawer'); drawerBody=$('drawerBody'); scrim=$('scrim');
+  fromSel=$('fromSel'); toSel=$('toSel'); routeResult=$('routeResult'); zoneList=$('zoneList');
+  feed=$('feed'); alertFeed=$('alertFeed'); reportModal=$('reportModal');
+  pickBanner=$('pickBanner'); toastEl=$('toast');
+
+  const opts = ZONES.map(z=>`<option value="${z.id}">${escHtml(z.name)}</option>`).join('');
+  fromSel.innerHTML=opts; toSel.innerHTML=opts; $('rZone').innerHTML=opts;
+  fromSel.value='junction'; toSel.value='othakadai';
+
+  $('timeSeg').querySelectorAll('button').forEach(b=> b.onclick = ()=>{
+    state.timePref = b.dataset.time;
+    applyTimeMode(true);
+  });
+
+  document.querySelectorAll('[data-layer]').forEach(b=> b.onclick = ()=>{
+    const k=b.dataset.layer; state.layers[k]=!state.layers[k];
+    b.setAttribute('aria-pressed', state.layers[k]); refresh();
+  });
+  document.querySelectorAll('[data-cat]').forEach(b=> b.onclick = ()=>{
+    const k=b.dataset.cat; state.cats[k]=!state.cats[k];
+    b.setAttribute('aria-pressed', state.cats[k]); drawHeat();
+  });
+  $('sevSeg').querySelectorAll('button').forEach(b=> b.onclick = ()=>{
+    state.severity = +b.dataset.sev;
+    $('sevSeg').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed', x===b));
+  });
+
+  $('btnRoute').onclick = findRoutes;
+  $('btnClearRoute').onclick = ()=>{ routeLayer.clearLayers(); routeResult.innerHTML=''; };
+
+  $('btnSidebar').onclick = openSidebarFn;
+  $('closeSidebar').onclick = closeSidebarFn;
+  scrim.onclick = ()=>{ closeSidebarFn(); closeDrawer(); };
+
+  $('btnReport').onclick = openReport;
+  $('closeReport').onclick = closeReportFn;
+  $('cancelReport').onclick = closeReportFn;
+  $('btnPick').onclick = startPick;
+  $('pickCancel').onclick = cancelPick;
+  $('reportForm').onsubmit = submitReport;
+
+  document.addEventListener('keydown', e=>{
+    if(e.key!=='Escape') return;
+    if(state.picking) return cancelPick();
+    if(!reportModal.classList.contains('hidden')) return closeReportFn();
+    if(drawer.classList.contains('open')) return closeDrawer();
+    closeSidebarFn();
+  });
+}
+
+function applyTimeMode(userAction){
+  const resolved = state.timePref==='auto' ? autoMode() : state.timePref;
+  const changed = resolved !== state.time;
+  state.time = resolved;
+  $('timeSeg').querySelectorAll('button').forEach(x=>{
+    const d=x.dataset.time;
+    x.setAttribute('aria-pressed', d===state.timePref || (state.timePref==='auto' && d===resolved));
+  });
+  $('modeLabel').textContent = state.time==='day' ? 'Day map' : 'Night map';
+  $('timeNote').textContent = state.timePref==='auto'
+    ? `Following Madurai local time — currently ${istNow().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}, so the ${state.time==='day'?'daytime':'after-dark'} weighting is on.`
+    : state.time==='day'
+      ? 'Daytime ratings assume normal footfall and open shops.'
+      : 'Night ratings drop hardest on isolated outer roads and ring-road stretches.';
+  if(changed || userAction){
+    refresh();
+    if(state.active) openZone(state.active, true);
+    if(routeLayer && routeLayer.getLayers().length) findRoutes();
+  }
+}
+
+function openSidebarFn(){ sidebar.classList.add('open'); scrim.classList.remove('hidden'); }
+function closeSidebarFn(){ sidebar.classList.remove('open'); if(!drawer.classList.contains('open')) scrim.classList.add('hidden'); }
+
+function openReport(){ reportModal.classList.remove('hidden'); reportModal.classList.add('flex'); icons(); }
+function closeReportFn(){ reportModal.classList.add('hidden'); reportModal.classList.remove('flex'); }
+function startPick(){
+  state.picking=true; closeReportFn();
+  pickBanner.classList.remove('hidden'); pickBanner.classList.add('flex');
+  map.getContainer().style.cursor='crosshair';
+}
+function cancelPick(){
+  state.picking=false;
+  pickBanner.classList.add('hidden'); pickBanner.classList.remove('flex');
+  map.getContainer().style.cursor='';
+  openReport();
+}
+
+async function submitReport(e){
+  e.preventDefault();
+  const lat=parseFloat($('rLat').value), lng=parseFloat($('rLng').value);
+  if(Number.isNaN(lat)||Number.isNaN(lng)){ toast('Add a location before submitting'); return; }
+
+  const btn=$('rSubmit'); btn.disabled=true; btn.style.opacity=.6;
+  const report = {
+    id: 'local-'+Date.now()+'-'+Math.random().toString(36).slice(2,7),
+    created_at: Date.now(),
+    locality: $('rZone').value,
+    latitude: lat, longitude: lng,
+    category: $('rType').value,
+    description: $('rNote').value.trim(),
+    severity: state.severity
+  };
+
+  const res = await sync.insert(report);
+  btn.disabled=false; btn.style.opacity=1;
+
+  if(!res.ok){
+    toast('Could not save that report — check your connection');
+    console.warn('[sync] insert failed:', res.error);
+    return;
+  }
+  if(res.echo) addReport(res.row, true);   // local mode: no realtime echo, add it ourselves
+
+  e.target.reset(); $('rLat').value=''; $('rLng').value='';
+  state.severity=2;
+  $('sevSeg').querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed', x.dataset.sev==='2'));
+  closeReportFn();
+
+  state.layers.reports = true;
+  document.querySelector('[data-layer="reports"]').setAttribute('aria-pressed','true');
+  map.flyTo([lat,lng],15,{duration:.7});
+  toast('Report submitted — thanks for flagging it');
+}
+
+/* A report arriving from anywhere: our own insert, another tab, or another user */
+function addReport(row, mine){
+  if(state.reports.some(r=>String(r.id)===String(row.id))) return;
+  state.reports.unshift(row);
+
+  if(state.layers.reports && reportLayer){
+    reportLayer.addLayer(reportMarker(row, true));   // animated drop
+    icons();
+  }
+  drawHeat(); drawZones(); renderZoneList(); renderFeed();
+  if(state.active) openZone(state.active, true);
+  if(!mine){
+    toast(`New report nearby: ${row.category}`);
+  }
+}
+
+/* Toast */
+let toastTimer;
+function toast(msg){
+  toastEl.innerHTML = `<i data-lucide="check-circle-2" class="w-4 h-4" style="color:var(--safe)"></i><span>${escHtml(msg)}</span>`;
+  toastEl.classList.remove('hidden'); toastEl.classList.add('flex'); icons();
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{ toastEl.classList.add('hidden'); toastEl.classList.remove('flex'); },2800);
+}
+
+/* ═══ 11. REFRESH + BOOT ═════════════════════════════════════════════════ */
+function refresh(){
+  if(!map) return;
+  state.layers.zones   ? zoneLayer.addTo(map)   : map.removeLayer(zoneLayer);
+  state.layers.labels  ? labelLayer.addTo(map)  : map.removeLayer(labelLayer);
+  state.layers.havens  ? havenLayer.addTo(map)  : map.removeLayer(havenLayer);
+  state.layers.reports ? reportLayer.addTo(map) : map.removeLayer(reportLayer);
+  drawZones(); drawHeat(); drawHavens(); drawReports(); renderZoneList(); renderFeed();
+}
+
+/* Every minute: re-apply decay, prune expired heat, re-check day/night */
+function tick(){
+  $('clock').textContent = istNow().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true}) + ' IST';
+  applyTimeMode(false);
+  drawHeat(); drawReports(); drawZones(); renderZoneList(); renderFeed(); renderAlerts();
+}
+
+async function boot(){
+  if(typeof L === 'undefined'){
+    document.getElementById('map').innerHTML =
+      '<div style="display:grid;place-items:center;height:100%;color:#8FA3B5;font-size:13px;padding:2rem;text-align:center">' +
+      'Leaflet could not load from the CDN. Check the network connection and reload.</div>';
+    return;
+  }
+  bindUI();
+  initMap();
+  applyTimeMode(false);
+  refresh();
+  icons();
+
+  feeds.start();
+
+  const rows = await sync.start(row => addReport(row, false));
+  state.reports = rows;
+  refresh();
+
+  tick();
+  setInterval(tick, CONFIG.tickMs);
+
+  if(state.timePref==='auto' && state.time==='night'){
+    setTimeout(()=>toast('It is after dark in Madurai — night weighting is on'), 900);
+  }
+}
+
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+else boot();
+</script>
+</body>
+</html>
